@@ -1,30 +1,26 @@
 import asyncio
 import csv
-import logging
 import os
+import logging
+from datetime import datetime
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 from enum import Enum
-from typing import Dict, List, Callable, Optional, Tuple
+from typing import Dict, Callable, List, Tuple
 
-# Constants
-FIELD_SIZE = 10
-LOG_DIR = "logs"
-DEFAULT_ANIMAL_CSV = "barn.csv"
-DEFAULT_CROP_CSV = "farm.csv"
+#filename FarmCore-qwen3-coder-480b-T5810-a02.py
 
-# Enums for states
+# Enums
 class AnimalState(Enum):
-    IDLE = "idle"
-    GROWING = "growing"
-    MATURE = "mature"
+    IDLE = "IDLE"
+    GROWING = "GROWING"
+    MATURE = "MATURE"
 
 class CropState(Enum):
-    EMPTY = "empty"
-    PLANTED = "planted"
-    READY = "ready"
+    EMPTY = "EMPTY"
+    PLANTED = "PLANTED"
+    READY = "READY"
 
-# Dataclasses for templates and entities
+# Dataclasses
 @dataclass
 class AnimalTemplate:
     animal: str
@@ -44,335 +40,387 @@ class CropTemplate:
     misc3: str
 
 @dataclass
-class AnimalPool:
+class AnimalData:
+    state: AnimalState
+    timer: int  # in seconds
     template: AnimalTemplate
-    count: int = 0
-    state: AnimalState = AnimalState.IDLE
-    maturity_time: Optional[datetime] = None
 
 @dataclass
-class CropPatch:
-    template: Optional[CropTemplate] = None
-    state: CropState = CropState.EMPTY
-    maturity_time: Optional[datetime] = None
+class CropData:
+    state: CropState
+    timer: int  # in seconds
+    template: CropTemplate
 
 # Farm Core Class
 class FarmCore:
     def __init__(self):
-        self.animal_pools: Dict[str, AnimalPool] = {}
-        self.field: List[List[CropPatch]] = [
-            [CropPatch() for _ in range(FIELD_SIZE)] for _ in range(FIELD_SIZE)
-        ]
+        self.animals: Dict[str, List[AnimalData]] = {}
+        self.crops: List[List[CropData]] = [[None for _ in range(10)] for _ in range(10)]
+        self.field_grid: List[List[str]] = [['.' for _ in range(10)] for _ in range(10)]
+        self.animal_templates: Dict[str, AnimalTemplate] = {}
+        self.crop_templates: Dict[str, CropTemplate] = {}
         self.callbacks: List[Callable] = []
         
         # Setup logging
-        os.makedirs(LOG_DIR, exist_ok=True)
-        timestamp = datetime.now().strftime("%y%m%d-%H%M%S")
-        log_filename = f"{LOG_DIR}/FarmCoreLog-{timestamp}.log"
+        self._setup_logging()
+        
+        # Load data
+        self._load_animal_data()
+        self._load_crop_data()
+        
+        # Initialize animals
+        self._initialize_animals()
+
+    def _setup_logging(self):
+        """Setup logging to timestamped files"""
+        if not os.path.exists("logs"):
+            os.makedirs("logs")
+            
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        log_filename = f"logs/FarmCoreLog-{timestamp}.log"
         
         logging.basicConfig(
             filename=log_filename,
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s'
         )
-        
-        # Initialize data
-        self._load_animal_templates()
-        self._load_crop_templates()
-        self._initialize_animal_pools()
+        self.logger = logging.getLogger(__name__)
 
-    def _create_default_csv(self, filename: str, headers: List[str], default_data: List[List[str]]):
-        """Create default CSV files if they don't exist"""
-        if not os.path.exists(filename):
-            with open(filename, 'w', newline='') as file:
-                writer = csv.writer(file)
-                writer.writerow(headers)
-                writer.writerows(default_data)
-
-    def _load_animal_templates(self):
+    def _load_animal_data(self):
         """Load animal templates from barn.csv"""
-        self._create_default_csv(
-            DEFAULT_ANIMAL_CSV,
-            ["animal", "minutes", "seconds", "product", "misc1", "misc2"],
-            [
-                ["cow", "0", "30", "milk", "", ""],
-                ["chicken", "0", "20", "egg", "", ""],
-                ["sheep", "0", "40", "wool", "", ""]
-            ]
-        )
-        
-        self.animal_templates: Dict[str, AnimalTemplate] = {}
-        with open(DEFAULT_ANIMAL_CSV, newline='') as file:
-            reader = csv.DictReader(file)
-            for row in reader:
-                template = AnimalTemplate(**row)
-                self.animal_templates[template.animal] = template
+        if not os.path.exists("barn.csv"):
+            self._create_default_barn_csv()
+            
+        try:
+            with open("barn.csv", "r") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    template = AnimalTemplate(
+                        animal=row["animal"],
+                        minutes=int(row["minutes"]),
+                        seconds=int(row["seconds"]),
+                        product=row["product"],
+                        misc1=row["misc1"],
+                        misc2=row["misc2"]
+                    )
+                    self.animal_templates[row["animal"]] = template
+            self.logger.info("Loaded animal data from barn.csv")
+        except Exception as e:
+            self.logger.error(f"Error loading animal data: {e}")
 
-    def _load_crop_templates(self):
+    def _load_crop_data(self):
         """Load crop templates from farm.csv"""
-        self._create_default_csv(
-            DEFAULT_CROP_CSV,
-            ["crop", "minutes", "seconds", "misc1", "misc2", "misc3"],
-            [
-                ["wheat", "0", "25", "", "", ""],
-                ["corn", "0", "35", "", "", ""],
-                ["carrot", "0", "15", "", "", ""]
+        if not os.path.exists("farm.csv"):
+            self._create_default_farm_csv()
+            
+        try:
+            with open("farm.csv", "r") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    template = CropTemplate(
+                        crop=row["crop"],
+                        minutes=int(row["minutes"]),
+                        seconds=int(row["seconds"]),
+                        misc1=row["misc1"],
+                        misc2=row["misc2"],
+                        misc3=row["misc3"]
+                    )
+                    self.crop_templates[row["crop"]] = template
+            self.logger.info("Loaded crop data from farm.csv")
+        except Exception as e:
+            self.logger.error(f"Error loading crop data: {e}")
+
+    def _create_default_barn_csv(self):
+        """Create default barn.csv file"""
+        with open("barn.csv", "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["animal", "minutes", "seconds", "product", "misc1", "misc2"])
+            writer.writerow(["cow", 0, 30, "milk", "", ""])
+            writer.writerow(["chicken", 0, 20, "egg", "", ""])
+            writer.writerow(["sheep", 0, 40, "wool", "", ""])
+        self.logger.info("Created default barn.csv")
+
+    def _create_default_farm_csv(self):
+        """Create default farm.csv file"""
+        with open("farm.csv", "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["crop", "minutes", "seconds", "misc1", "misc2", "misc3"])
+            writer.writerow(["wheat", 0, 25, "", "", ""])
+            writer.writerow(["corn", 0, 35, "", "", ""])
+            writer.writerow(["carrot", 0, 15, "", "", ""])
+        self.logger.info("Created default farm.csv")
+
+    def _initialize_animals(self):
+        """Initialize animal pools"""
+        for animal_type, template in self.animal_templates.items():
+            self.animals[animal_type] = [
+                AnimalData(state=AnimalState.IDLE, timer=0, template=template)
+                for _ in range(6)
             ]
-        )
-        
-        self.crop_templates: Dict[str, CropTemplate] = {}
-        with open(DEFAULT_CROP_CSV, newline='') as file:
-            reader = csv.DictReader(file)
-            for row in reader:
-                template = CropTemplate(**row)
-                self.crop_templates[template.crop] = template
+        self.logger.info("Initialized animal pools")
 
-    def _initialize_animal_pools(self):
-        """Initialize animal pools from templates"""
-        for name, template in self.animal_templates.items():
-            self.animal_pools[name] = AnimalPool(template=template)
+    async def game_loop(self):
+        """Main game loop for updating states"""
+        while True:
+            await asyncio.sleep(1)  # Update every second
+            self._update_animals()
+            self._update_crops()
+            self._notify_callbacks()
 
-    def register_callback(self, callback: Callable):
-        """Register a callback for UI updates"""
-        self.callbacks.append(callback)
-        
+    def _update_animals(self):
+        """Update animal timers and states"""
+        for animal_list in self.animals.values():
+            for animal in animal_list:
+                if animal.state == AnimalState.GROWING:
+                    animal.timer -= 1
+                    if animal.timer <= 0:
+                        animal.state = AnimalState.MATURE
+                        animal.timer = 0
+
+    def _update_crops(self):
+        """Update crop timers and states"""
+        for y in range(10):
+            for x in range(10):
+                crop = self.crops[y][x]
+                if crop and crop.state == CropState.PLANTED:
+                    crop.timer -= 1
+                    if crop.timer <= 0:
+                        crop.state = CropState.READY
+                        crop.timer = 0
+                        self.field_grid[y][x] = f"[{crop.template.crop[0].upper()}]"
+
     def _notify_callbacks(self):
-        """Notify all registered callbacks"""
+        """Notify registered callbacks"""
         for callback in self.callbacks:
             try:
                 callback()
             except Exception as e:
-                logging.error(f"Callback error: {e}")
+                self.logger.error(f"Error in callback: {e}")
 
-    async def game_loop(self):
-        """Main game loop that updates states periodically"""
-        while True:
-            await asyncio.sleep(1)  # Check every second
-            now = datetime.now()
-            
-            # Update animal states
-            for pool in self.animal_pools.values():
-                if pool.state == AnimalState.GROWING and pool.maturity_time <= now:
-                    pool.state = AnimalState.MATURE
-                    logging.info(f"{pool.template.animal} pool is now mature")
-                    
-            # Update crop states
-            for row in self.field:
-                for patch in row:
-                    if patch.state == CropState.PLANTED and patch.maturity_time <= now:
-                        patch.state = CropState.READY
-                        logging.info("A crop patch is now ready for harvest")
-                        
-            self._notify_callbacks()
+    def register_callback(self, callback: Callable):
+        """Register a callback for updates"""
+        self.callbacks.append(callback)
 
+    # Animal Management Methods
     def feed_animals(self, animal_type: str, count: int) -> Dict[str, any]:
-        """Feed animals to start growing process"""
-        if animal_type not in self.animal_pools:
+        """Feed animals to start growing"""
+        if animal_type not in self.animals:
             return {"success": False, "message": f"Unknown animal type: {animal_type}"}
             
-        pool = self.animal_pools[animal_type]
-        if pool.state != AnimalState.IDLE:
-            return {"success": False, "message": f"{animal_type} pool is not idle"}
-            
-        if count <= 0 or count > 6:
-            return {"success": False, "message": "Count must be between 1 and 6"}
-            
-        pool.count = count
-        duration = timedelta(
-            minutes=pool.template.minutes,
-            seconds=pool.template.seconds
-        )
-        pool.maturity_time = datetime.now() + duration
-        pool.state = AnimalState.GROWING
-        
-        logging.info(f"Started feeding {count} {animal_type}(s)")
-        self._notify_callbacks()
-        return {"success": True, "message": f"Started feeding {count} {animal_type}(s)"}
+        fed_count = 0
+        for animal in self.animals[animal_type]:
+            if animal.state == AnimalState.IDLE and fed_count < count:
+                template = animal.template
+                animal.state = AnimalState.GROWING
+                animal.timer = template.minutes * 60 + template.seconds
+                fed_count += 1
+                
+        self.logger.info(f"Fed {fed_count} {animal_type}(s)")
+        return {
+            "success": True, 
+            "message": f"Successfully fed {fed_count} {animal_type}(s)",
+            "count": fed_count
+        }
 
     def harvest_animals(self, animal_type: str, count: int) -> Dict[str, any]:
-        """Harvest mature animals"""
-        if animal_type not in self.animal_pools:
+        """Harvest products from mature animals"""
+        if animal_type not in self.animals:
             return {"success": False, "message": f"Unknown animal type: {animal_type}"}
             
-        pool = self.animal_pools[animal_type]
-        if pool.state != AnimalState.MATURE:
-            return {"success": False, "message": f"{animal_type} pool is not mature"}
-            
-        if count <= 0 or count > pool.count:
-            return {"success": False, "message": f"Invalid count. Pool has {pool.count} animals"}
-            
-        product = pool.template.product
-        harvested_count = count
-        pool.count -= count
-        
-        if pool.count == 0:
-            pool.state = AnimalState.IDLE
-            pool.maturity_time = None
-            
-        logging.info(f"Harvested {harvested_count} {product}(s) from {animal_type}")
-        self._notify_callbacks()
-        return {"success": True, "message": f"Harvested {harvested_count} {product}(s)"}
+        harvested_count = 0
+        product = None
+        for animal in self.animals[animal_type]:
+            if animal.state == AnimalState.MATURE and harvested_count < count:
+                product = animal.template.product
+                animal.state = AnimalState.IDLE
+                animal.timer = 0
+                harvested_count += 1
+                
+        if harvested_count > 0:
+            self.logger.info(f"Harvested {harvested_count} {product}(s) from {animal_type}(s)")
+            return {
+                "success": True,
+                "message": f"Successfully harvested {harvested_count} {product}(s)",
+                "product": product,
+                "count": harvested_count
+            }
+        else:
+            return {"success": False, "message": "No mature animals to harvest"}
 
+    # Crop Management Methods
     def plant_crops(self, count: int, crop_type: str) -> Dict[str, any]:
-        """Plant crops in available patches (pool-style)"""
+        """Plant crops in available field patches"""
         if crop_type not in self.crop_templates:
             return {"success": False, "message": f"Unknown crop type: {crop_type}"}
             
-        if count <= 0:
-            return {"success": False, "message": "Count must be positive"}
-            
+        planted_count = 0
         template = self.crop_templates[crop_type]
-        planted = 0
         
-        # Find empty patches
-        for row in self.field:
-            for patch in row:
-                if planted >= count:
+        for y in range(10):
+            for x in range(10):
+                if planted_count >= count:
                     break
-                if patch.state == CropState.EMPTY:
-                    duration = timedelta(
-                        minutes=template.minutes,
-                        seconds=template.seconds
+                if self.crops[y][x] is None:
+                    timer = template.minutes * 60 + template.seconds
+                    self.crops[y][x] = CropData(
+                        state=CropState.PLANTED,
+                        timer=timer,
+                        template=template
                     )
-                    patch.template = template
-                    patch.maturity_time = datetime.now() + duration
-                    patch.state = CropState.PLANTED
-                    planted += 1
-            if planted >= count:
+                    self.field_grid[y][x] = f"({crop_type[0].upper()})"
+                    planted_count += 1
+            if planted_count >= count:
                 break
                 
-        if planted == 0:
-            return {"success": False, "message": "No empty patches available"}
-            
-        logging.info(f"Planted {planted} {crop_type}(s)")
-        self._notify_callbacks()
-        return {"success": True, "message": f"Planted {planted} {crop_type}(s)"}
+        self.logger.info(f"Planted {planted_count} {crop_type}(s)")
+        return {
+            "success": True,
+            "message": f"Successfully planted {planted_count} {crop_type}(s)",
+            "count": planted_count
+        }
 
     def plant_crop(self, x: int, y: int, crop_type: str) -> Dict[str, any]:
         """Plant a crop at specific coordinates"""
-        if not (0 <= x < FIELD_SIZE and 0 <= y < FIELD_SIZE):
+        if not (0 <= x < 10 and 0 <= y < 10):
             return {"success": False, "message": "Invalid coordinates"}
             
         if crop_type not in self.crop_templates:
             return {"success": False, "message": f"Unknown crop type: {crop_type}"}
             
-        patch = self.field[y][x]
-        if patch.state != CropState.EMPTY:
-            return {"success": False, "message": "Patch is not empty"}
+        if self.crops[y][x] is not None:
+            return {"success": False, "message": "Patch already occupied"}
             
         template = self.crop_templates[crop_type]
-        duration = timedelta(
-            minutes=template.minutes,
-            seconds=template.seconds
+        timer = template.minutes * 60 + template.seconds
+        self.crops[y][x] = CropData(
+            state=CropState.PLANTED,
+            timer=timer,
+            template=template
         )
+        self.field_grid[y][x] = f"({crop_type[0].upper()})"
         
-        patch.template = template
-        patch.maturity_time = datetime.now() + duration
-        patch.state = CropState.PLANTED
-        
-        logging.info(f"Planted {crop_type} at ({x}, {y})")
-        self._notify_callbacks()
-        return {"success": True, "message": f"Planted {crop_type} at ({x}, {y})"}
+        self.logger.info(f"Planted {crop_type} at ({x}, {y})")
+        return {
+            "success": True,
+            "message": f"Successfully planted {crop_type} at ({x}, {y})"
+        }
 
     def harvest_crops(self, count: int) -> Dict[str, any]:
-        """Harvest ready crops (pool-style)"""
-        if count <= 0:
-            return {"success": False, "message": "Count must be positive"}
-            
-        harvested = 0
-        # Find ready patches
-        for row in self.field:
-            for patch in row:
-                if harvested >= count:
+        """Harvest ready crops (pool style)"""
+        harvested = []
+        harvested_count = 0
+        
+        for y in range(10):
+            for x in range(10):
+                if harvested_count >= count:
                     break
-                if patch.state == CropState.READY:
-                    patch.state = CropState.EMPTY
-                    patch.template = None
-                    patch.maturity_time = None
-                    harvested += 1
-            if harvested >= count:
+                crop = self.crops[y][x]
+                if crop and crop.state == CropState.READY:
+                    harvested.append(crop.template.crop)
+                    self.crops[y][x] = None
+                    self.field_grid[y][x] = "."
+                    harvested_count += 1
+            if harvested_count >= count:
                 break
                 
-        if harvested == 0:
+        if harvested_count > 0:
+            self.logger.info(f"Harvested {harvested_count} crop(s)")
+            return {
+                "success": True,
+                "message": f"Successfully harvested {harvested_count} crop(s)",
+                "crops": harvested,
+                "count": harvested_count
+            }
+        else:
             return {"success": False, "message": "No ready crops to harvest"}
-            
-        logging.info(f"Harvested {harvested} crop(s)")
-        self._notify_callbacks()
-        return {"success": True, "message": f"Harvested {harvested} crop(s)"}
 
     def harvest_crop(self, x: int, y: int) -> Dict[str, any]:
-        """Harvest a specific crop patch"""
-        if not (0 <= x < FIELD_SIZE and 0 <= y < FIELD_SIZE):
+        """Harvest a crop at specific coordinates"""
+        if not (0 <= x < 10 and 0 <= y < 10):
             return {"success": False, "message": "Invalid coordinates"}
             
-        patch = self.field[y][x]
-        if patch.state != CropState.READY:
-            return {"success": False, "message": "Patch is not ready for harvest"}
+        crop = self.crops[y][x]
+        if not crop:
+            return {"success": False, "message": "No crop at this location"}
             
-        crop_type = patch.template.crop
-        patch.state = CropState.EMPTY
-        patch.template = None
-        patch.maturity_time = None
+        if crop.state != CropState.READY:
+            return {"success": False, "message": "Crop is not ready for harvest"}
+            
+        crop_type = crop.template.crop
+        self.crops[y][x] = None
+        self.field_grid[y][x] = "."
         
-        logging.info(f"Harvested {crop_type} from ({x}, {y})")
-        self._notify_callbacks()
-        return {"success": True, "message": f"Harvested {crop_type} from ({x}, {y})"}
+        self.logger.info(f"Harvested {crop_type} at ({x}, {y})")
+        return {
+            "success": True,
+            "message": f"Successfully harvested {crop_type} at ({x}, {y})",
+            "crop": crop_type
+        }
 
+    # Query Methods
     def get_animal_status(self) -> Dict[str, any]:
-        """Get status of all animal pools"""
+        """Get status of all animals"""
         status = {}
-        for name, pool in self.animal_pools.items():
-            status[name] = {
-                "state": pool.state.value,
-                "count": pool.count,
-                "time_remaining": (
-                    max(0, (pool.maturity_time - datetime.now()).total_seconds())
-                    if pool.maturity_time else 0
-                ) if pool.state == AnimalState.GROWING else 0
+        for animal_type, animals in self.animals.items():
+            idle = sum(1 for a in animals if a.state == AnimalState.IDLE)
+            growing = sum(1 for a in animals if a.state == AnimalState.GROWING)
+            mature = sum(1 for a in animals if a.state == AnimalState.MATURE)
+            status[animal_type] = {
+                "idle": idle,
+                "growing": growing,
+                "mature": mature
             }
         return status
 
     def get_crop_status(self) -> Dict[str, any]:
-        """Get status of crop field"""
-        empty = sum(1 for row in self.field for patch in row if patch.state == CropState.EMPTY)
-        planted = sum(1 for row in self.field for patch in row if patch.state == CropState.PLANTED)
-        ready = sum(1 for row in self.field for patch in row if patch.state == CropState.READY)
+        """Get status of all crops"""
+        empty = sum(1 for row in self.crops for patch in row if patch is None)
+        planted = sum(1 for row in self.crops for patch in row if patch and patch.state == CropState.PLANTED)
+        ready = sum(1 for row in self.crops for patch in row if patch and patch.state == CropState.READY)
         
         return {
             "empty": empty,
             "planted": planted,
-            "ready": ready,
-            "field": [
-                [self._get_patch_symbol(patch) for patch in row]
-                for row in self.field
-            ]
+            "ready": ready
         }
 
-    def _get_patch_symbol(self, patch: CropPatch) -> str:
-        """Get symbol for a crop patch"""
-        if patch.state == CropState.EMPTY:
-            return "."
-        elif patch.state == CropState.PLANTED:
-            return f"({patch.template.crop[0].upper()})"
-        else:  # READY
-            return f"[{patch.template.crop[0].upper()}]"
+    def get_field_visualization(self) -> str:
+        """Get field visualization with consistent cell spacing"""
+        result = "  0  1  2  3  4  5  6  7  8  9 \n"
+        for y in range(10):
+            row = f"{y} "
+            for x in range(10):
+                if self.crops[y][x] is None:
+                    row += "[ ] "  # Empty patch with consistent spacing
+                else:
+                    crop = self.crops[y][x]
+                    symbol = crop.template.crop[0].upper()
+                    if crop.state == CropState.PLANTED:
+                        row += f"({symbol}) "  # Planted crops in parentheses
+                    else:  # READY
+                        row += f"[{symbol}] "   # Ready crops in brackets
+            result += row + "\n"
+        return result
 
-    def get_config(self) -> Dict[str, any]:
-        """Get available animals and crops"""
-        return {
-            "animals": list(self.animal_templates.keys()),
-            "crops": list(self.crop_templates.keys())
-        }
 
-# CLI Interface
+    def get_available_animals(self) -> list:
+        """Get list of available animal types"""
+        return list(self.animal_templates.keys())
+
+    def get_available_crops(self) -> list:
+        """Get list of available crop types"""
+        return list(self.crop_templates.keys())
+
+
+# CLI Interface for Testing
 class FarmCLI:
     def __init__(self, farm: FarmCore):
         self.farm = farm
 
     def run(self):
-        """Run the command-line interface"""
-        print("Farm Management Simulator")
-        print("Type 'help' for available commands\n")
+        """Run the CLI interface"""
+        print("Farm Management Simulation")
+        print("Type 'help' for available commands")
         
         while True:
             try:
@@ -386,36 +434,52 @@ class FarmCLI:
                     break
                 elif cmd == "help":
                     self._show_help()
+                elif cmd == "feed":
+                    if len(command) >= 3:
+                        animal_type = command[1]
+                        count = int(command[2])
+                        result = self.farm.feed_animals(animal_type, count)
+                        print(result["message"])
+                    else:
+                        print("Usage: feed <animal_type> <count>")
+                elif cmd == "harvest" and len(command) >= 2:
+                    if command[1].isdigit():  # Harvest crops by count
+                        count = int(command[1])
+                        result = self.farm.harvest_crops(count)
+                        print(result["message"])
+                    elif len(command) >= 3:  # Harvest animal or crop at coordinates
+                        try:
+                            x, y = int(command[1]), int(command[2])
+                            result = self.farm.harvest_crop(x, y)
+                            print(result["message"])
+                        except ValueError:
+                            animal_type = command[1]
+                            count = int(command[2])
+                            result = self.farm.harvest_animals(animal_type, count)
+                            print(result["message"])
+                    else:
+                        print("Usage: harvest <count> OR harvest <animal_type> <count> OR harvest <x> <y>")
+                elif cmd == "plant":
+                    if len(command) >= 3 and command[1].isdigit() and command[2].isdigit():
+                        x, y = int(command[1]), int(command[2])
+                        crop_type = command[3] if len(command) > 3 else "wheat"
+                        result = self.farm.plant_crop(x, y, crop_type)
+                        print(result["message"])
+                    elif len(command) >= 3:
+                        count = int(command[1])
+                        crop_type = command[2]
+                        result = self.farm.plant_crops(count, crop_type)
+                        print(result["message"])
+                    else:
+                        print("Usage: plant <count> <crop_type> OR plant <x> <y> [crop_type]")
                 elif cmd == "status":
                     self._show_status()
+                elif cmd == "field":
+                    print(self.farm.get_field_visualization())
                 elif cmd == "config":
                     self._show_config()
-                elif cmd == "feed":
-                    if len(command) != 3:
-                        print("Usage: feed <animal_type> <count>")
-                    else:
-                        result = self.farm.feed_animals(command[1], int(command[2]))
-                        print(result["message"])
-                elif cmd == "harvest" and command[1] in self.farm.animal_pools:
-                    if len(command) != 3:
-                        print("Usage: harvest <animal_type> <count>")
-                    else:
-                        result = self.farm.harvest_animals(command[1], int(command[2]))
-                        print(result["message"])
-                elif cmd == "plant" and len(command) == 3:
-                    result = self.farm.plant_crops(int(command[1]), command[2])
-                    print(result["message"])
-                elif cmd == "plant" and len(command) == 4:
-                    result = self.farm.plant_crop(int(command[1]), int(command[2]), command[3])
-                    print(result["message"])
-                elif cmd == "harvest" and len(command) == 2:
-                    result = self.farm.harvest_crops(int(command[1]))
-                    print(result["message"])
-                elif cmd == "harvest" and len(command) == 3:
-                    result = self.farm.harvest_crop(int(command[1]), int(command[2]))
-                    print(result["message"])
                 else:
-                    print("Unknown command. Type 'help' for available commands")
+                    print(f"Unknown command: {cmd}")
             except KeyboardInterrupt:
                 break
             except Exception as e:
@@ -423,62 +487,68 @@ class FarmCLI:
 
     def _show_help(self):
         """Show help information"""
-        print("""
-Available Commands:
-  feed <animal_type> <count>     - Feed animals to start production
-  harvest <animal_type> <count>  - Harvest products from mature animals
-  plant <count> <crop_type>      - Plant crops in any available patch
-  plant <x> <y> <crop_type>      - Plant a crop at specific coordinates
-  harvest <count>                - Harvest ready crops (anywhere)
-  harvest <x> <y>                - Harvest a specific crop patch
-  status                         - Show farm status
-  config                         - Show available animals/crops
-  help                           - Show this help message
-  quit                           - Exit the game
-        """)
+        print("\nAvailable Commands:")
+        print("  feed <animal_type> <count>     - Feed animals")
+        print("  harvest <animal_type> <count>  - Harvest animal products")
+        print("  harvest <count>                - Harvest ready crops (pool style)")
+        print("  harvest <x> <y>                - Harvest crop at coordinates")
+        print("  plant <count> <crop_type>      - Plant crops (auto-assign)")
+        print("  plant <x> <y> [crop_type]      - Plant crop at coordinates")
+        print("  status                         - Show farm status")
+        print("  field                          - Show field visualization")
+        print("  config                         - Show available animals/crops")
+        print("  help                           - Show this help")
+        print("  quit                           - Exit the game")
+        print()
 
     def _show_status(self):
         """Show farm status"""
+        print("\nAnimal Status:")
         animal_status = self.farm.get_animal_status()
-        crop_status = self.farm.get_crop_status()
+        for animal_type, status in animal_status.items():
+            print(f"  {animal_type}: Idle={status['idle']}, Growing={status['growing']}, Mature={status['mature']}")
         
-        print("\n=== Animal Status ===")
-        for animal, status in animal_status.items():
-            time_info = f" ({status['time_remaining']:.0f}s remaining)" if status['time_remaining'] > 0 else ""
-            print(f"{animal.capitalize()}: {status['state']} x{status['count']}{time_info}")
-            
-        print("\n=== Crop Status ===")
-        print(f"Empty: {crop_status['empty']}, Planted: {crop_status['planted']}, Ready: {crop_status['ready']}")
-        print("\nField Layout:")
-        for row in crop_status["field"]:
-            print(" ".join(row))
+        print("\nCrop Status:")
+        crop_status = self.farm.get_crop_status()
+        print(f"  Empty: {crop_status['empty']}, Planted: {crop_status['planted']}, Ready: {crop_status['ready']}")
         print()
 
     def _show_config(self):
         """Show configuration"""
-        config = self.farm.get_config()
-        print(f"\nAvailable Animals: {', '.join(config['animals'])}")
-        print(f"Available Crops: {', '.join(config['crops'])}\n")
+        print("\nAvailable Animals:")
+        for animal in self.farm.get_available_animals():
+            print(f"  {animal}")
+        
+        print("\nAvailable Crops:")
+        for crop in self.farm.get_available_crops():
+            print(f"  {crop}")
+        print()
+
 
 # Main Execution
 async def main():
-    """Main entry point"""
-    # Create farm instance
+    # Create logs directory if it doesn't exist
+    import os
+    os.makedirs("logs", exist_ok=True)
+    
+    # Initialize farm system
     farm = FarmCore()
     
-    # Start game loop in background
-    game_task = asyncio.create_task(farm._game_loop())
+    # Start the game loop in the background
+    game_task = asyncio.create_task(farm.game_loop())
     
-    # Run CLI
+    # Run CLI interface
     cli = FarmCLI(farm)
-    cli.run()
-    
-    # Cleanup
-    game_task.cancel()
     try:
-        await game_task
-    except asyncio.CancelledError:
-        pass
+        cli.run()
+    finally:
+        # Cancel the game loop when done
+        game_task.cancel()
+        try:
+            await game_task
+        except asyncio.CancelledError:
+            pass
+
 
 if __name__ == "__main__":
     asyncio.run(main())
