@@ -391,7 +391,7 @@ class FarmCore:
             row = f"{y} "
             for x in range(10):
                 if self.crops[y][x] is None:
-                    row += "[ ] "  # Empty patch with consistent spacing
+                    row += " _  "  # Empty patch with consistent spacing
                 else:
                     crop = self.crops[y][x]
                     symbol = crop.template.crop[0].upper()
